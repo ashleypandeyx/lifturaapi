@@ -63,14 +63,6 @@ safety_settings = [
     ),
 ]
 
-# Utility function to download a blob from GCS
-def download_blob(bucket_name, source_blob_name, destination_file_name):
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(source_blob_name)
-    blob.download_to_filename(destination_file_name)
-    print(f"Blob {source_blob_name} downloaded to {destination_file_name}.")
-
 # Extract keypoints using MediaPipe
 def extract_keypoints(video_path):
     cap = cv2.VideoCapture(video_path)
@@ -148,47 +140,39 @@ def analyze_with_gemini(peak_frame, peak_keypoints, workout_type):
     feedback = response.text if response.text else "No feedback received."
     return feedback, peak_frame, peak_keypoints
 
-# Save the frame with incorrect form, display it, and upload to GCS
-def save_incorrect_frame(frame, keypoints, save_path, bucket_name, destination_blob_name):
-    for keypoint in keypoints.values():
-        x, y, _ = keypoint
-        cv2.circle(frame, (int(x * frame.shape[1]), int(y * frame.shape[0])), 5, (0, 0, 255), -1)
-    cv2.imwrite(save_path, frame)
-    print(f"Saved incorrect form frame to {save_path}.")
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(destination_blob_name)
-    blob.upload_from_filename(save_path)
-    print(f"Uploaded {save_path} to {destination_blob_name} in {bucket_name} bucket.")
-
 # Main API route
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
     video_file = request.files['video']
     workout_type = request.form['workout_type']
-    bucket_name = "video-bucket333"
     
+    # Save the video temporarily
     video_path = "uploaded_video.mp4"
     video_file.save(video_path)
 
-    keypoints_list = extract_keypoints(video_path)
-    if not keypoints_list:
-        return jsonify({"error": "No keypoints were extracted. Check the video path or content."}), 400
+    try:
+        # Extract keypoints from the video
+        keypoints_list = extract_keypoints(video_path)
+        if not keypoints_list:
+            return jsonify({"error": "No keypoints were extracted. Check the video path or content."}), 400
 
-    peak_frame, peak_keypoints = find_peak_frame(keypoints_list, workout_type)
-    if peak_frame is None or peak_keypoints is None:
-        return jsonify({"error": "No peak frame detected. Unable to analyze form."}), 400
+        # Find the peak frame based on the workout type
+        peak_frame, peak_keypoints = find_peak_frame(keypoints_list, workout_type)
+        if peak_frame is None or peak_keypoints is None:
+            return jsonify({"error": "No peak frame detected. Unable to analyze form."}), 400
 
-    feedback, incorrect_frame, incorrect_keypoints = analyze_with_gemini(peak_frame, peak_keypoints, workout_type)
+        # Analyze keypoints with Gemini AI
+        feedback, incorrect_frame, incorrect_keypoints = analyze_with_gemini(peak_frame, peak_keypoints, workout_type)
 
-    save_path = "incorrect_frame.png"
-    save_incorrect_frame(incorrect_frame, incorrect_keypoints, save_path, bucket_name, "incorrect_frame.png")
-
-    return jsonify({"feedback": feedback})
+        # Return the feedback as JSON
+        return jsonify({"feedback": feedback})
+    
+    finally:
+        # Delete the temporary video file after processing
+        if os.path.exists(video_path):
+            os.remove(video_path)
 
 # Run the Flask app
 if __name__ == "__main__":
    port = int(os.environ.get("PORT", 8080))
    app.run(host="0.0.0.0", port=port)
-
-    
