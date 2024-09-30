@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 import cv2
+import base64
 from google.cloud import storage
 import mediapipe as mp
 import vertexai
@@ -140,39 +141,36 @@ def analyze_with_gemini(peak_frame, peak_keypoints, workout_type):
     feedback = response.text if response.text else "No feedback received."
     return feedback, peak_frame, peak_keypoints
 
+# Convert frame to base64
+def frame_to_base64(frame):
+    _, buffer = cv2.imencode('.png', frame)
+    return base64.b64encode(buffer).decode('utf-8')
+
 # Main API route
 @app.route('/analyze', methods=['POST'])
 def analyze_video():
     video_file = request.files['video']
     workout_type = request.form['workout_type']
     
-    # Save the video temporarily
     video_path = "uploaded_video.mp4"
     video_file.save(video_path)
-
-    try:
-        # Extract keypoints from the video
-        keypoints_list = extract_keypoints(video_path)
-        if not keypoints_list:
-            return jsonify({"error": "No keypoints were extracted. Check the video path or content."}), 400
-
-        # Find the peak frame based on the workout type
-        peak_frame, peak_keypoints = find_peak_frame(keypoints_list, workout_type)
-        if peak_frame is None or peak_keypoints is None:
-            return jsonify({"error": "No peak frame detected. Unable to analyze form."}), 400
-
-        # Analyze keypoints with Gemini AI
-        feedback, incorrect_frame, incorrect_keypoints = analyze_with_gemini(peak_frame, peak_keypoints, workout_type)
-
-        # Return the feedback as JSON
-        return jsonify({"feedback": feedback})
     
-    finally:
-        # Delete the temporary video file after processing
-        if os.path.exists(video_path):
-            os.remove(video_path)
+    keypoints_list = extract_keypoints(video_path)
+    if not keypoints_list:
+        return jsonify({"error": "No keypoints were extracted. Check the video path or content."}), 400
+
+    peak_frame, peak_keypoints = find_peak_frame(keypoints_list, workout_type)
+    if peak_frame is None or peak_keypoints is None:
+        return jsonify({"error": "No peak frame detected. Unable to analyze form."}), 400
+
+    feedback, incorrect_frame, incorrect_keypoints = analyze_with_gemini(peak_frame, peak_keypoints, workout_type)
+    
+    # Convert the peak frame to base64
+    image_base64 = frame_to_base64(incorrect_frame)
+    
+    return jsonify({"feedback": feedback, "image": image_base64})
 
 # Run the Flask app
 if __name__ == "__main__":
-   port = int(os.environ.get("PORT", 8080))
-   app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
